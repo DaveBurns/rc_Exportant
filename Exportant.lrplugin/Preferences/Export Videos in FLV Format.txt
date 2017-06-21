@@ -1,0 +1,1944 @@
+--[[
+        Plugin configuration file (aka 'Advanced Settings').
+        
+        Note: Named members of return table are accessible in source code as:
+        
+            app:getPref( name )
+            
+            provided there is no app:initPref( name, val ) or app:setPref( name, val ) statements executed prior,
+            which hide/override the named members in this file.
+            
+            
+        *** Important: when editing, take care to assure punctuation and syntax are not disturbed. In comments, it doesn't matter, but in the rest - every character is meaningful,
+                       including spaces, commas, brackets, dots, underscores...
+                       
+        There are 2 kinds of comments:
+        1. single line
+        2. multi-line (like this one).
+        
+        lines beginning with '--' (without the apostrophes) are single line comments.
+        lines beginning with '- - [ [' (without the spaces) begin multi-line comments, which end with '- - ] ]' (without the spaces).
+        
+        Definitions:
+        
+        * Comment-out: to prepend '--' to a non-comment line making it a comment, or to wrap one or more non-comment lines with '- - [ [' & '- - ] ]'. This turns non-comment lines into comments, rendering them null & void for all practical purposes.
+        * Un-comment: to remove the '--' at the front of a comment line thus enabling it to take effect (or removing '- - [ [' & '- - ] ]' wrappage).
+        
+        
+        This configuration file is interpreted in the context of the Elare Plugin Framework - most Lr namespaces are available, and all standard Elare interface objects are available, including:
+        
+        String/text formatting:
+        * str:fmtx - a derivative of Lightroom's LOC function - same syntax for specifying placeholders in the format string..., e.g.
+            str:fmtx( "Hello ^1^2", "World", "!!!" ) -- will create the string: "Hello World!!!".
+          string.format 'C' string formatting function, e.g.
+            string.format( "%u times", count ) -- outputs "5 times", if count is 5.
+        Debugging (ignored if advanced debugging is not enabled) :
+        * Debug.lognpp - log any number of parameters in a "pretty" format, e.g.
+            Debug.lognpp( "before", devSets, "after", photo:getDevelopSettings() ) -- log before and after develop settings.
+        * Debug.pause and Debug.pauseIf - shows values of variables, if any, and presents options to keep going or stop, e.g.
+            Debug.pause( myvar ) -- stop execution temporarily, and show the value of myvar variable.
+            Debug.pause() -- show nothing, but confirm execution has reached this point.
+        Logging to plugin log file:
+        * app:log and app:logv log file methods, e.g.
+            app:log( "Here it is: ^1", it ) -- log it
+            app:logv( "hmm..." ) -- log hmm... - included in log file only if verbose logging is enabled.
+            
+        and MANY more, but the luadoc is out of date - see source code itself for reference.
+          
+        Reference documentation can be obtained by reading the API doc, downloadable as part of the Lightroom SDK, from here:
+        
+        http://www.adobe.com/devnet/photoshoplightroom.html
+        
+        Get lua language documentation from www.lua.org
+--]]
+
+
+-- declare return table
+local _t = {}
+
+
+
+-- Here are some plugins that have metadata you may be interested in:
+-- local devMetaId = "com.robcole.lightroom.metadata.DevMeta" -- legacy.
+local devMetaId = "com.robcole.lightroom.DevMeta" -- current.
+local exifMetaId = "com.robcole.lightroom.ExifMeta"
+local customMetadataId = "com.robcole.lightroom.CustomMetadata"
+local changeManagerId = "com.robcole.lightroom.ChangeManager" -- explicit, for local use only.
+-- consult the metadata module for each plugin to see which metadata IDs are available for folder/file naming.
+
+
+
+--[[
+        Date/time formatting.
+        
+        These are the options:
+        •	%B: Full name of month
+        •	%b: 3-letter name of month
+        •	%m: 2-digit month number
+        •	%d: Day number with leading zero
+        •	%e: Day number without leading zero
+        •	%j: Julian day of the year with leading zero
+        •	%y: 2-digit year number
+        •	%Y: 4-digit year number
+        •	%H: Hour with leading zero (24-hour clock)
+        •	%1H: Hour without leading zero (24-hour clock)
+        •	%I: Hour with leading zero (12-hour clock)
+        •	%1I: Hour without leading zero (12-hour clock)
+        •	%M: Minute with leading zero
+        •	%S: Second with leading zero
+        •	%p: AM/PM designation
+        •	%P: AM/PM designation, same as %p,but causes white space trimming to be applied as the last formatting step.
+        •	%%: % symbol
+        taken from SDK api doc, which is available here:
+        
+        http://www.adobe.com/devnet/photoshoplightroom.html
+        
+        Note: You can not use ‘:’ in Windows filenames, and so it’s not a good idea to put them in *any* filenames.
+        
+        Examples:
+            Nick's preference:
+                local defaultDateFormat = "%m-%d-%Y"
+                local defaultTimeFormat = "%H_%M"
+                local defaultDateTimeFormat = str:fmtx( "^1 ^2", defaultDateFormat, defaultTimeFormat )
+            Rob's preference (the default):
+                local defaultDateFormat = "%Y-%m-%d"
+                local defaultTimeFormat = "%H-%M-%S"
+                local defaultDateTimeFormat = str:fmtx( "^1_^2", defaultDateFormat, defaultTimeFormat )
+--]]
+local currentDateTime
+local defaultDateFormat = "%Y-%m-%d"
+local defaultTimeFormat = "%H-%M-%S"
+local defaultDateTimeFormat = str:fmtx( "^1_^2", defaultDateFormat, defaultTimeFormat )
+
+
+
+--[[
+        Define replacement for missing metadata.
+        
+        Note: mdata should be nil or "" (blank string).
+--]]
+local function replaceMissingStuff( key, mdata )
+    if mdata ~= nil then
+        -- app:callingAssert( type( mdata ) == 'string', "missing not nil not string - hmm..." )
+        -- app:callingAssert( #mdata == 0, "missing string not missing..." )
+        return "blank" -- str:fmtx( "^1.blank", key ) - reminder: user can supply label - just need representative value.
+    else
+        return "nil" -- str:fmtx( "^1.nil", key ) - ditto
+    end
+end
+
+
+
+--[[
+        Define replacement for characters that don't do well in folder/filenames.
+        
+        nil key means do generic replacement
+	
+        Note: this should only be called when mdata is string, so check in calling context.
+--]]
+local function replaceFunnyStuff( key, mdata, allowSlashes )
+    app:callingAssert( mdata ~= nil, "mdata must not be nil" )
+    if #mdata > 0 then
+        if not allowSlashes then
+        	mdata = mdata:gsub( '/', '_[fs]_' )
+        	mdata = mdata:gsub( '\\', '_[bs]_' )
+        end
+    	mdata = mdata:gsub( ':', '[c]' )
+    	mdata = mdata:gsub( '?', '[q]' )
+    	mdata = mdata:gsub( '*', '[!]' )
+    elseif key then
+        mdata = replaceMissingStuff( key, "" )
+    end
+	return mdata
+end
+
+
+
+--[[
+        Define replacement for unrecognized values corresponding to recognized keys.
+        
+        Note: value could be wrong because key is wrong, so...
+        
+        Note: key should not be blank, and mdata is usually not (but could be) nil. non-nil mdata could be any type.
+--]]
+local function replaceWrongStuff( key, mdata )
+    app:callingAssert( str:is( key, "wrong-stuff key" ), "blank key" ) -- if key is not nil, but not string, str-is will through a data-type error using passed string.
+    if mdata == nil then
+        Debug.pause( key, "missing value is being considered wrong - why not missing?" ) -- generally wrong values are non-nil.
+        return str:fmtx( "^1.nil", key ) -- key is output too in this case (see note in function header).
+    else
+        return str:fmtx( "^1.^2", key, mdata ) -- ditto.
+    end
+end
+
+
+
+--[[
+        Reformat Lr standard formatted metadata for compatibility with folder/filenames.
+        
+        Goal is for metadata to match "as you see in Lightroom" as much as possible.
+--]]
+local function reformatFormattedMetadata( params )
+    local photo = params.photo or error( "no photo" )
+    local key = params.key or error( "no key" )
+    local mdata = params.metadata -- may be blank nil, or less likely 'false'.
+    local rawMeta = params.rawMeta or error( "no raw meta" )
+    local fmtMeta = params.fmtMeta or error( "no fmt meta" )
+    local typ = type( mdata )
+    if not str:is( key ) then
+        return ""
+    end
+    if typ == 'string' then
+        return replaceFunnyStuff( key, mdata )
+    elseif typ == 'nil' then
+        if key == 'rating' then
+            return "" -- unrated.
+        else
+            return replaceMissingStuff( key ) -- nil
+        end
+    elseif typ == 'boolean' then
+        return tostring( mdata ) -- 'true' or 'false'.
+    elseif typ == 'number' then -- e.g. rating.
+        if key == 'rating' then
+            if mdata == 0 then
+                return ""
+            else
+                return string.rep( "*", mdata )
+            end
+        else
+            return tostring( mdata )
+        end
+    -- reminder: @12/Nov/2013 21:21, this never happens, since formatted metadata is "simple" (so table values are not present), but that could change..
+    elseif typ == 'table' then -- note: by default, tables are returned in raw metadata, not formatted.
+--[[    Note: all tables in formatted metadata are listed here:
+        ======================================================
+        IPTC Extension:
+        ---------------
+        locationCreated
+        locationShown
+        artworksShown
+        registryId
+        ---------------
+        PLUS:
+        -----
+        imageSupplier
+        imageCreator
+        copyrightOwner
+        licensor
+        ----
+--]]    
+        app:show{ warning="IPTC Extension and PLUS (table) metadata not yet supported: ^1.", key }
+        return ""
+    else -- probably never happens:
+        app:show{ warning="^1 metadata not supported, key: ^2, value: ^3.", typ, key, mdata }
+        return ""
+    end
+end
+
+
+
+--[[
+        Format Lr standard raw metadata for compatibility with folder/filenames.
+--]]
+local function formatRawMetadata( params, dateTimeFormat )
+    if str:is( dateTimeFormat ) then
+        dateTimeFormat = replaceFunnyStuff( nil, dateTimeFormat )
+    end
+    local photo = params.photo or error( "no photo" )
+    local key = params.key or error( "no key" )
+    local rawMeta = params.rawMeta or error( "no raw meta" )
+    local fmtMeta = params.fmtMeta or error( "no fmt meta" )
+    local mdata = params.metadata
+    local typ = type( mdata )
+    if not str:is( key ) then
+        return ""
+    end
+    if typ == 'number' then -- e.g. raw (numeric) date/times, rating, and pick-status.
+        if key == 'rating' then
+            if mdata == 0 then
+                Debug.pause( "rating is zero" )
+                return "0" -- I don't think this ever happens, since unrated is actually nil, not zero.
+            else
+                return tostring( mdata )
+            end
+        elseif key == 'pickStatus' then
+            if mdata == 0 then
+                return "unpicked"
+            elseif mdata == 1 then
+                return "picked"
+            elseif mdata == -1 then
+                return "rejected"
+            else
+                return str:fmtx( "^1.^2", key, mdata )
+            end
+        elseif key == 'aspectRatio' then
+            if mdata then
+                return string.format( "%.1f", mdata )
+            else
+                return replaceMissingStuff( key ) -- nil
+            end
+        elseif key:sub( 1, 4 ) == 'date' then
+            return LrDate.timeToUserFormat( mdata, dateTimeFormat or defaultDateTimeFormat )
+        elseif key:find( "Time" ) then
+            return LrDate.timeToUserFormat( mdata, dateTimeFormat or defaultDateTimeFormat )
+        else -- e.g. video duration when photo
+            Debug.pause( key, mdata )
+            return tostring( mdata )
+        end
+    elseif typ == 'string' then
+        return reformatFormattedMetadata( params ) -- sorta cheating, just be aware: raw strings are considered formatted metadata.
+    elseif typ == 'nil' then -- raw metadata is absent
+        if key == 'rating' then
+            return "0" -- unrated
+        elseif key:sub( 1, 4 ) == 'date' then
+            local dt
+            if key == 'dateNow' then
+                dt = currentDateTime or LrDate.currentTime() -- note: used for sample too, prior to export initiation.
+            else                
+                local file = rawMeta['path']
+                if fso:existsAsFile( file ) then
+                    local attrs = LrFileUtils.fileAttributes( file )
+                    if attrs then
+                        if key == 'date' then -- date created.
+                            dt = attrs.fileCreationDate
+                        elseif key == 'dateMod' then
+                            dt = attrs.fileModificationDate
+                        -- else leave dt nil
+                        end
+                    else
+                        error( "no attrs" )                    
+                    end
+                else
+                    Debug.pause( key, "file is missing" ) -- ideally, missing files would be detected prior to now, but this could be smart preview exporting.
+                    return str:fmtx( "[NO ^1]", key ) -- file missing is a little different than metadata missing.
+                end
+            end
+            if dt then
+                return LrDate.timeToUserFormat( dt, dateTimeFormat or defaultDateTimeFormat )
+            else
+                return replaceWrongStuff( key ) -- nil
+            end
+        else
+            Debug.pause( key, "missing raw data" )
+            return replaceMissingStuff( key )
+        end
+    elseif typ == 'boolean' then
+        return tostring( mdata )
+    elseif typ == 'table' then -- note: by default, tables are returned in raw metadata, not formatted.
+        if key == 'dimensions' or key == 'croppedDimensions' then
+            return str:fmtx( "^1x^2", mdata.width, mdata.height )
+        elseif key == 'gps' then
+            local lat = mdata.latitude
+            local lon = mdata.longitude
+            if lat and lon then -- numeric
+                return str:fmtx( "(^1, ^2)", string.format( "%.5f", lat ), string.format( "%.5f", lon ) )
+            else
+                Debug.pause( key, "no lat/long" )
+                return replaceMissingStuff( key ) -- nil (this should never happen)
+            end
+        elseif key == 'durationRatio' or key == 'trimmedDurationRatio' then
+            local n = mdata.numerator
+            local d = mdata.denominator
+            if n and d then -- numeric
+                return str:fmtx( "(^1, ^2)", n, d )
+            else
+                Debug.pause( key, "no num/den" )
+                return replaceMissingStuff( key ) -- nil (shouldn't happen).
+            end
+        elseif key == 'smartPreviewInfo' then
+            if tab:isNotEmpty( mdata ) then -- has smart preview
+                return "present"
+            else
+                return "absent"
+            end
+        elseif key == 'customMetadata' then
+            app:show{ warning="Custom (plugin) metadata not available via raw metadata - should be implemented as true 'Custom Metadata'." }
+            return ""
+        else
+            app:show{ warning="Raw metadata table not supported yet, key: ^1", key }
+            return ""
+        end
+    else
+        app:show{ warning="^1 raw metadata not supported, key: ^2, value: ^3", typ, key, mdata }
+        return ""
+    end
+end
+
+
+
+--[[
+        Get and format custom metadata.
+        
+        Note: keys comes from values in getCustomMetadataItems function below. 
+        
+        *** this function can not yield.
+--]]
+local function getCustomMetadata( params )
+    --app:callingAssert( LrTasks.canYield(), "no can yield" )
+    local photo = params.photo or error( "no photo" )
+    local settings = params.settings or error( "no settings" )
+    local key = params.key or error( "no key" )
+    local fmtMeta = params.fmtMeta or error( "no fmt meta" )
+    local rawMeta = params.rawMeta or error( "no raw meta" )
+    if not str:is( key ) then
+        return ""
+    elseif key == 'fileNameBase' then
+        return LrPathUtils.removeExtension( fmtMeta.fileName )
+    elseif key == 'dateOriginal' then
+        params.key = 'dateTimeOriginal'
+        params.metadata = rawMeta[params.key]
+        return formatRawMetadata( params, defaultDateFormat )
+    elseif key == 'timeOriginal' then
+        params.key = 'dateTimeOriginal'
+        params.metadata = rawMeta[params.key]
+        return formatRawMetadata( params, defaultTimeFormat )
+    elseif str:isBeginningWith( key, 'dto_' ) then
+        local fmt = key:sub( 5 )
+        if str:is( fmt ) then
+            params.key = 'dateTimeOriginal'
+            params.metadata = rawMeta[params.key]
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dto_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif str:isBeginningWith( key, 'dt_' ) then
+        local fmt = key:sub( 4 )
+        if str:is( fmt ) then
+            params.key = 'dateTime'
+            params.metadata = rawMeta[params.key]
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dt_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif str:isBeginningWith( key, 'dtd_' ) then
+        local fmt = key:sub( 5 )
+        if str:is( fmt ) then
+            params.key = 'dateTimeDigitized'
+            params.metadata = rawMeta[params.key]
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dt_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif str:isBeginningWith( key, 'dtfc_' ) then
+        local fmt = key:sub( 6 )
+        if str:is( fmt ) then
+            params.key = 'date' -- generic "date" trick.
+            params.metadata = nil -- forces file-creation-time to be returned.
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dtfc_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif str:isBeginningWith( key, 'dtfm_' ) then
+        local fmt = key:sub( 6 )
+        if str:is( fmt ) then
+            params.key = 'dateMod' -- when metadata nil, this is last-mod time.
+            params.metadata = nil  -- metadata nil means "requires special handling" to acquire date metadata.
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dtfm_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif str:isBeginningWith( key, 'dtc_' ) then -- date-time current.
+        local fmt = key:sub( 5 )
+        if str:is( fmt ) then
+            params.key = 'dateNow' -- when metadata nil, this is current time.
+            params.metadata = nil  -- metadata nil means "requires special handling" to acquire date metadata.
+            return formatRawMetadata( params, fmt )
+        else
+            app:show{ warning="'dtc_' must be followed by valid data/time format string, e.g. with %'s in it." }
+        end
+    elseif key == 'parentFolderName' then
+        local dir = LrPathUtils.parent( rawMeta.path )
+        return LrPathUtils.leafName( dir )
+    elseif key == 'grandParentFolderName' then
+        local dir = LrPathUtils.parent( rawMeta.path )
+        if str:is( dir ) then
+            dir = LrPathUtils.parent( dir )
+            if str:is( dir ) then
+                return LrPathUtils.leafName( dir )
+            end
+        end
+        return "root"        
+    elseif key == 'greatGrandParentFolderName' then
+        local dir = LrPathUtils.parent( rawMeta.path )
+        if str:is( dir ) then
+            dir = LrPathUtils.parent( dir )
+            if str:is( dir ) then
+                dir = LrPathUtils.parent( dir )
+                if str:is( dir ) then
+                    return LrPathUtils.leafName( dir )
+                end
+            end
+        end
+        return "root"
+    elseif key == 'catalogName' then
+        local dir, name = cat:getCatDir()
+        return name
+    elseif key == 'exifMeta_lastUpdate' then
+        local emDat = rawMeta.customMetadata[str:fmtx( '^1.lastUpdate', exifMetaId)] -- always present if exif-meta installed & enabled.
+        if str:is( emDat ) then
+            return emDat
+        else
+            app:error( "ExifMeta plugin is not installed or not enabled, or something. Another option for exif metadata in names - use exif-tool session instead of ExifMeta plugin." )
+        end
+        --Debug.lognpp( rawMeta.customMetadata )
+        --Debug.showLogFile()
+    elseif key:find( 'oll_' ) then -- collection (name).
+        local collInfo
+        if key:find( 'egColl_' ) then
+            collInfo = params.regCollInfo -- collection is key, value is table with rootName and collName members.
+        elseif key:find( 'ubColl_' ) then
+            collInfo = params.pubCollInfo -- ditto.
+        else
+            app:error( "bad token key: '^1'", key )
+        end
+        local uScore = key:find( "_" )
+        local collRootSet = key:sub( uScore + 1 )
+        local baseKey = key:sub( 1, uScore - 1 )
+        if not str:is( collRootSet ) then
+            collRootSet = "[root]"
+        end
+        local name
+        local set = {}
+        if tab:is( collInfo ) then
+            for coll, names in pairs( collInfo ) do
+                local rootName
+                if #names > 1 then
+                    rootName = names[#names]
+                else
+                    rootName = "[root]"
+                end
+                if str:is( rootName ) then
+                    if str:isBeginningWith( rootName, collRootSet ) then -- defaults to plain text.
+                        if baseKey == 'regColl' then
+                            name = names[1]
+                            break
+                        elseif baseKey == 'pRegColl' then
+                            name = names[2] or "parent"
+                            break
+                        elseif baseKey == 'gpRegColl' then
+                            name = names[3] or "gparent"
+                            break
+                        elseif baseKey == 'pubColl' then
+                            name = names[1]
+                            break
+                        elseif baseKey == 'pPubColl' then
+                            name = names[2] or "parent"
+                            break
+                        elseif baseKey == 'gpPubColl' then
+                            name = names[3] or "gparent"
+                            break
+                        else
+                            app:error( "bad base key: ^1", baseKey )
+                        end
+                    else
+                        set[rootName] = true
+                    end
+                else
+                    set["?"] = true
+                end
+            end
+        else
+            return replaceMissingStuff( key )
+        end
+        if str:is( name ) then
+            return replaceFunnyStuff( baseKey, name )
+        elseif tab:is( set ) then
+            local array = tab:createArrayFromSet( set )
+            table.sort( array )
+            return table.concat( array, "; " )
+        else
+            return replaceMissingStuff( key ) 
+        end
+    else
+        app:error( "'^1' token is not defined", key )
+    end
+    return key
+end
+
+
+
+--[[
+        Define UI (title) and values (ID passed to getCustomMetadata function as 'key') for custom metadata.
+        
+        Note: elements are stripped of path separators, so there can be no "source sub-path" item for example.
+        (use tree-sync-publisher if such folder structure is desired, or implement via get-custom-dir function.
+        
+        Note2: You can put whatever you want for both title and value - just make sure they are unique.
+               The values must be detected in getCustomMetadata function above (key).
+--]]
+_t.getCustomMetadataItems = function()
+    return {
+        { title="Filename (without extension)", value="fileNameBase" },
+        { title="Parent Folder", value="parentFolderName" },
+        { title="Grandparent Folder", value="grandParentFolderName" },
+        { title="Great Grandparent Folder", value="greatGrandParentFolderName" },
+        { title="Collection", value='regColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Parent Collection", value='pRegColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Grandparent Collection", value='gpRegColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Publish Collection", value='pubColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Parent Publish Collection", value='pPubColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Grandparent Publish Collection", value='gpPubColl_[REPLACE-THIS-BRACKETED-EXPRESSION-WITH-BEGINNING-OF-ROOT-COLLECTION-SET-NAME]' },
+        { title="Catalog", value="catalogName" },
+        
+        { separator = true },
+        { title="Date Original (capture date)", value="dateOriginal" },
+        { title="Time Original (capture time)", value="timeOriginal" },
+
+        -- free format date/times
+        { separator = true },
+        { title="Date/Time Original (free format)", value="dto_%Y-%m-%d_%H-%M-%S" },
+        { title="Date/Time Digitized (free format)", value="dtd_%Y-%m-%d_%H-%M-%S" },
+        { title="Date/Time \"Generic\" (free format)", value="dt_%Y-%m-%d_%H-%M-%S" },
+        { title="Date/Time File Created (free format)", value="dtfc_%Y-%m-%d_%H-%M-%S" },
+        { title="Date/Time File Modified (free format)", value="dtfm_%Y-%m-%d_%H-%M-%S" },
+        { title="Date/Time Now (free format)", value="dtc_%Y-%m-%d_%H-%M-%S" },
+        
+        { separator = true },
+        { title="Exif Meta - Last Update", value="exifMeta_lastUpdate" },
+        
+        -- convenience entry to aid re-selecting same item (leave this alone):
+        { separator = true },
+        { title="None", value="" }, -- "nothing" selected.
+    }
+end
+
+
+
+--[[
+        Replace tokens with the text they represent.
+        
+        PS - Called from async task.
+--]]
+local function replaceTokens( photo, props, propKey )
+
+    --app:callingAssert( LrTasks.canYield(), "replace tokens must be able to yield" )
+    -- note: gsub func can not yield.
+    local hasSlashes = ( props[propKey] or "" ):find( "[\\/]" ) -- user entered data includes slashes, so preserve them (don't replace them).
+
+    assert( reformatFormattedMetadata, "no fmtr" )
+    assert( formatRawMetadata, "no rfmtr" )
+    assert( getCustomMetadata, "no cmfmtr" )
+    
+    local fmtMeta = photo:getFormattedMetadata()
+    local rawMeta = photo:getRawMetadata()
+    local collInfo
+    local parents
+    local function considerParent( parent, coll )
+        if parent ~= nil then
+            parents[#parents + 1] = parent:getName()
+            considerParent( parent:getParent(), coll )
+        else
+            collInfo[coll] = parents
+        end
+    end
+    local function doColls( colls )
+        collInfo = {}
+        for i, v in ipairs( colls ) do
+            parents = { v:getName() }
+            considerParent( v:getParent(), v )
+        end
+    end
+
+    local function xlate( val )
+        local regCollInfo
+        local pubCollInfo
+        if val:find( "egColl_" ) then
+            doColls( photo:getContainedCollections() ) -- this may be the empty set (excludes smart collections).
+            regCollInfo = collInfo
+        end
+        if val:find( "ubColl_" ) then
+            local pc = photo:getContainedPublishedCollections() -- reminder: this may be the empty set (excludes smart publish collections).
+            doColls( pc ) -- returns quick if no pub-colls.
+            pubCollInfo = collInfo
+        end
+    	local function fmtFunc( token )
+    	    local key = token:sub( 4, -2 )
+    		local metadata = reformatFormattedMetadata {
+    		    photo = photo,
+    		    settings = props,
+    		    key = key,
+    		    metadata = fmtMeta[key],
+    		    fmtMeta=fmtMeta,
+    		    rawMeta=rawMeta,
+    		}
+    		return metadata or ""
+    	end
+    	local function rawFunc( token )
+    	    local key = token:sub( 4, -2 )
+    		local metadata = formatRawMetadata {
+    		    photo = photo,
+    		    settings = props,
+    		    key = key,
+    		    metadata = rawMeta[key],
+    		    fmtMeta=fmtMeta,
+    		    rawMeta=rawMeta,
+    		}
+    		return metadata or ""
+    	end
+    	local function custFunc( token )
+    	    local key = token:sub( 4, -2 )
+    		local metadata = getCustomMetadata {
+    		    photo=photo,
+    		    settings=props,
+    		    key=key, -- more of an ID.
+    		    fmtMeta=fmtMeta,
+    		    rawMeta=rawMeta,
+    		    regCollInfo=regCollInfo,
+    		    pubCollInfo=pubCollInfo,
+    		}
+    		return metadata or ""
+    	end
+    	local rslt = val:gsub('($F%b{})', fmtFunc )
+    	rslt = rslt:gsub('($R%b{})', rawFunc )
+    	if getCustomMetadata then
+    	    rslt = rslt:gsub('($C%b{})', custFunc )
+    	end
+    	return rslt
+    end
+    
+    local rslt = xlate( LrStringUtils.trimWhitespace( props[propKey] ) )
+    return replaceFunnyStuff( nil, rslt, hasSlashes )
+end
+
+
+
+--[[
+        Called to get sub-path to be used for custom folder naming.
+        
+        Final export location is governed by get-custom-dir function, but this is used (externally) for UI sample display,
+        and may be used internally (in here) too.
+--]]
+_t.getSubPath = function( photo, props, propKey )
+    return replaceTokens( photo, props, propKey )
+end
+
+
+
+--[[
+        Called to get base of filename to be used for custom file naming.
+        
+        Final filename is governed by get-custom-text-replacement function (extension is handled externally),
+        but this is used (externally) for UI sample display, and may be used internally (in here) too.
+--]]
+_t.getFileBaseName = function( photo, props, propKey )
+    return replaceTokens( photo, props, propKey )
+end
+
+
+
+--[[
+        Table defining some common requirements which must be satisfied in order to be considered "ok to export".
+
+        One could use smart collection rule instead, but this allows more inside info / trouble-shooting..        
+        
+        Reminder: if one simply excludes from publishing using smart collection those that don't meet all these publishing criteria,
+        then one loses the opportunity to remedy, so the idea is: use smart collection (or regular collection) to specify photos that,
+        if/when finished editing, and locked..., are to be published.
+        
+        Keyword condition format is: structure (table) of simple values and structure( tables ), e.g.
+            { -- start of table structure
+                min = 2, -- minimum of 2 keywords required.
+                max = 50, -- maximum of 50 keywords allowed.
+                --all = { 'MandatoryKeyword_1', 'MandatoryKeyword_2' }, -- these must all be present (array of strings).
+                --one = { 'WebSite_1', WebSite_2' }, -- one of these must be present (array of strings).
+                --none = { 'Private' }, -- none of these must be present (array of strings).
+            }, -- end of table structure (comma in case other export conditions follow).
+        
+        Metadata (non-keyword) condition format is: array (table) of structures (tables), e.g.
+            { -- start of array table
+                { -- start of structure table #1
+                    fields = { "one", "two" }, -- array of metadata field (item) names.
+                    values = nil,              -- meaning any value (non-nil) will "match".
+                }, -- end of structure table (trailing comma ok)
+                { -- start of structure table #2
+                    fields = { "one", "two" }, -- array of metadata field (item) names.
+                    values = { 0, "0" },       -- any numeric value equal to zero, or any string value *containing* '0' will match.
+                }, -- end of structure table (trailing comma ok)
+            } -- end of array table (must be comma if another follows).
+            -- such a thing could be assigned to all, one, or excl.
+            
+        *** NOTE: Strings comparisons are case sensitive ***
+        
+        See 'RC Standard' for example export conditions which may better illustrate.
+        
+        These can be used for "fields":
+        =============================
+            Lightroom Formatted Metadata: (fmtMetadata)
+            -------------------------------------------
+            keywordTags:  Keywords
+            keywordTagsForExport:  Exportable Keywords
+            fileName:  File Name
+            copyName:  Virtual Copy Name
+            folderName:  Folder Name
+            fileSize:  File Size
+            fileType:  File Type
+            rating:  Rating
+            label:  Label
+            title:  Title
+            caption:  Caption
+            dimensions:  Dimensions
+            croppedDimensions:  Cropped Dimensions
+            exposure:  Exposure
+            shutterSpeed:  Shutter Speed
+            aperture:  Aperture
+            brightnessValue:  Brightness Value
+            exposureBias:  Exposure Bias
+            flash:  Flash
+            exposureProgram:  Exposure Program
+            meteringMode:  Metering Mode
+            isoSpeedRating:  ISO
+            focalLength:  Focal Length
+            focalLength35mm:  Focal Length 35mm
+            lens:  Lens
+            subjectDistance:  Focus Distance
+            dateTimeOriginal:  Capture Time
+            dateTimeDigitized:  Digitization Time
+            dateTime:  Date/Time
+            cameraMake:  Camera Make
+            cameraModel:  Camera Model
+            cameraSerialNumber:  Camera Serial Number
+            artist:  Artist
+            software:  Software
+            gps:  GPS
+            gpsAltitude:  GPS Altitude
+            creator:  Creator
+            creatorJobTitle:  Creator Job Title
+            creatorAddress:  Creator Address
+            creatorCity:  Creator City
+            creatorStateProvince:  Creator State/Province
+            creatorPostalCode:  Creator Postal Code
+            creatorCountry:  Creator Country
+            creatorPhone:  Creator Phone
+            creatorEmail:  Creator Email
+            creatorUrl:  Creator URL
+            headline:  Headline
+            iptcSubjectCode:  IPTC Subject Code
+            descriptionWriter:  Description Writer
+            iptcCategory:  IPTC Category
+            iptcOtherCategories:  IPTC Other Categories
+            dateCreated:  Date Created
+            intellectualGenre:  Intellectual Genre
+            scene:  Scene
+            location:  Location
+            city:  City
+            stateProvince:  State/Province
+            country:  Country
+            isoCountryCode:  (ISO) Country Code
+            jobIdentifier:  Job Identifier
+            instructions:  Instructions
+            provider:  Provider
+            source:  Source
+            copyright:  Copyright
+            rightsUsageTerms:  Rights Usage Terms
+            copyrightInfoUrl:  Copyright Info URL
+            personShown:  Person Shown
+            locationCreated:  Location Created
+            locationShown:  Location Shown
+            nameOfOrgShown:  Name of Organization Shown
+            codeOfOrgShown:  Code of Organization Shown
+            event:  Event
+            artworksShown:  Artuworks Shown
+            additionalModelInfo:  Additional Model Info
+            modelAge:  Model Age
+            minorModelAge:  Minor Model Age
+            modelReleaseStatus:  Model Release Status
+            modelReleaseID:  Model Release ID
+            imageSupplier:  Image Supplier
+            registryId:  Registry ID
+            maxAvailWidth:  Max Available Width
+            maxAvailHeight:  Max Available Height
+            sourceType:  Source Type
+            imageCreator:  Image Creator
+            copyrightOwner:  Copyright Owner
+            licensor:  Licensor
+            propertyReleaseID:  Property Release ID
+            propertyReleaseStatus:  Property Release Status
+            digImageGUID:  Digital Image GUID
+            plusVersion:  Plus Version
+            
+            Lightroom Raw Metadata: (rawMetadata)
+            -------------------------------------
+            fileSize:  File Size
+            rating:  Rating
+            dimensions:  Dimensions
+            croppedDimensions:  Cropped Dimensions
+            shutterSpeed:  Shutter Speed
+            aperture:  Aperture
+            exposureBias:  Exposure Bias
+            flash:  Flash
+            isoSpeedRating:  ISO
+            focalLength:  Focal Length
+            focalLength35mm:  Focal Length 35mm
+            dateTimeOriginal:  Capture Time
+            dateTimeDigitized:  Digitization Time
+            dateTime:  Date/Time
+            gps:  GPS
+            gpsAltitude:  GPS Altitude
+            countVirtualCopies:  Count Virtual Copies
+            virtualCopies:  Virtual Copies
+            masterPhoto:  Master Photo
+            isVirtualCopy:  Is Virtual Copy
+            countStackInFolderMembers:  Count Stack in Folder Members
+            stackInFolderMembers:  Stack in Folder Members
+            isInStackInFolder:  Is in Stack in Folder
+            stackInFolderIsCollapsed:  Stack in Folder is Collapsed
+            stackPositionInFolder:  Stack Position in Folder
+            topOfStackInFolderContainingPhoto:  Top of Stack in Folder Containing Photo
+            colorNameForLabel:  Color Name for Label
+            fileFormat:  File Format
+            width:  Width
+            height:  Height
+            aspectRatio:  Aspect Ratio
+            isCropped:  Is Cropped
+            dateTimeOriginalISO8601:  Capture Time (ISO8601)
+            dateTimeDigitizedISO8601:  Digitization Time (ISO8601)
+            dateTimeISO8601:  Date/Time (ISO8601)
+            lastEditTime:  Last Edit Time
+            editCount:  Edit Count
+            uuid:  UUID
+            path:  Path
+            isVideo:  Is Video
+            durationInSeconds:  Duration in Seconds
+            keywords:  Keywords
+            customMetadata:  Custom Metadata
+            pickStatus:  Pick Status
+            trimmedDurationInSeconds:  Trimmed Duration in Seconds
+            durationRatio:  Duration Ratio
+            trimmedDurationRatio:  Trimmed Duration Ratio
+            locationIsPrivate:  Location is Private
+            smartPreviewInfo:  Smart Preview Info
+            
+            Plugin Metadata
+            ---------------
+            For now, you'll have to look at the "metadata.lua" module in each plugin.
+            
+        =====================================
+--]]
+local exportConditions = {
+
+    --[[
+            Edit keyword criteria to match your druthers:
+    --]]
+    keywords = {
+        min = 1,
+        max = 500,
+        --all = {},
+        --one = {},
+        --none = {},
+    },
+    
+    --[[
+            Uncomment this if you want to include formatted metadata criteria:
+    --]]
+    --[[
+    fmtMetadata = {
+        all = { { fields={ 'title' }, values=nil } },           -- all must be present (non-blank).
+        one = { { fields={ 'caption', 'headline' }, values=nil } },    -- one must be present (non-blank).
+        excl = { { fields={ 'title', 'caption', 'headline' } , values={ "fukame-sideways..." } } },         -- exclusions: specify fields and excluded text.
+    },
+    --]]
+    
+    --[[
+            Uncomment this if you want to evaluate raw metadata instead of (or as well as) formatted:
+    --]]
+    --rawMetadata = {},
+    
+    --[[
+            Uncomment this if you want to take plugin metadata into consideration:
+    --]]
+    --[[
+    pluginMetadata = { -- 
+        -- Custom Metadata
+        [customMetadataId] = {
+            all = {},
+            one = {},
+            excl = { { fields={ 'my_to_do' }, values=nil } }, -- if anything left to do, then not ok to export.
+        },
+        -- ChangeManager
+        [changeManagerId] = {
+            all = { { fields={ 'locked' }, values={ 'yes' } }, { fields={ "lockDate" }, values=nil } }, -- another variation of "is-locked".
+            one = {},
+            excl = {},
+        },
+    },
+    --]]
+}
+
+
+
+--[[
+        called during export "pre-processing", if corresponding box checked in UI.
+        
+        reminder: app--display-error will flash only briefly if no photos are ok-to-export, and reload-upon-export is enabled.
+        
+        return status (boolean, required) true if ok, or probably ok; false if not ok, or probably not.
+        return message (string, optional) if returned, photo will be included in prompt - whether checkbox ticked (enabled for export) or not depends on status.
+        
+        Examples:
+            return true -- ok to export, no do not include in prompt.
+            return false -- not ok to export, do not include in prompt.
+            return true, "Everything OK" -- include in prompt, checked by default.
+            return false, "Something is Off" -- include in prompt, unchecked by default.
+--]]
+_t.okToExport = function( params )
+    app:callingAssert( params, "no params" )
+    -- export settings and photo are all that is available in params.
+    local photo = params.photo or error( "no photo" )
+    local photoName = cat:getPhotoNameDisp( photo, true ) -- full name, no cache.
+    app:logv()
+    app:logv( "Considering whether ok to export '^1'", photoName )
+    local settings = params.exportSettings or error( "no export settings" )
+    -- note: this function is called before filter-context created - list of photos not yet available, so no metadata cache...
+    local ok = true
+    local msg -- equals nil.
+    local errb = {}
+    local function recErr( errm, ... )
+        errb[#errb + 1] = str:fmtx( errm or error( "no error message to record" ), unpack{ ... } )
+    end
+    local keywords -- LrKeyword object array
+    local keywordSet -- keyword name set.
+    local function initKeywordSet()
+        if keywordSet then return end -- already init
+        keywordSet = {}
+        for i, v in ipairs( keywords ) do
+            keywordSet[v:getName()] = true
+        end
+    end
+    local function isKeyword( keywordName ) -- name
+        return keywordSet[keywordName]
+    end
+    if tab:isNotEmpty ( exportConditions.keywords ) then
+        local cond = exportConditions.keywords
+        keywords = photo:getRawMetadata( "keywords" ) -- set may not be needed.
+        if cond.min then
+            if #keywords > cond.min then
+                app:logv( "has min num (^1) of keywords: ^2", cond.min, #keywords )
+            else
+                recErr( "less than ^1 keywords: ^2", cond.min, #keywords )
+            end
+        end
+        if cond.max then
+            if #keywords <= cond.max then
+                app:logv( "hasn't exceeded max num (^1) of keywords: ^2", cond.max, #keywords )
+            else
+                recErr( "more than ^1 keywords: ^2", cond.max, #keywords )
+            end
+        end
+        if cond.all and #cond.all > 0 then
+            initKeywordSet() -- compute set
+            for i, v in ipairs( cond.all ) do
+                if not isKeyword( v ) then
+                    ok = false
+                    recErr( "keyword missing: ^1", v ) -- not comprehensive
+                    break -- because of this
+                end
+            end
+        end
+        if cond.one and #cond.one > 0 then
+            initKeywordSet()
+            local one = false
+            for i, v in ipairs( cond.one ) do
+                if isKeyword( v ) then
+                    one = true
+                    break
+                end
+            end
+            if not one then
+                recErr( "a required keyword is missing" ) -- no specific offender.
+                ok = false
+            end
+        end
+        if cond.none and #cond.none > 0 then
+            initKeywordSet()
+            for i, v in ipairs( cond.none ) do
+                if isKeyword( v ) then
+                    ok = false
+                    recErr( "keyword violation: ^1", v ) -- not comprehensive
+                    break -- because of this.
+                end
+            end
+        end
+    end
+    local function checkMetadata( cond, mdata )
+        if cond.all and #cond.all > 0 then
+            for i, x in ipairs( cond.all ) do
+                if x.fields then
+                    for j, field in ipairs( x.fields ) do
+                        local data = mdata[field]
+                        if x.values then
+                            for k, value in ipairs( x.values ) do
+                                local typ = type( value )
+                                if typ == 'string' then
+                                    if not ( str:is( data ) and data:find( value ) ) then
+                                        ok = false
+                                        recErr( "'^1' has no '^2'", field, value ) -- not comprehensive
+                                        break -- because of this.
+                                    end
+                                else
+                                    if not ( data ~= nil and data == value ) then
+                                        ok = false
+                                        recErr( "'^1' is not '^2'", field, value )
+                                        break
+                                    end
+                                end
+                            end
+                        else
+                            if data == nil then -- relying on text fields being nil not "", I think that holds.
+                                ok = false
+                                recErr( "'^1' is blank", field ) -- not comprehensive
+                                break
+                            end
+                        end
+                        if not ok then
+                            break
+                        end
+                    end
+                else
+                    app:error( "No all fields." )
+                end
+                if not ok then
+                    break
+                end
+            end
+        end
+        if cond.one and #cond.one > 0 then
+            local sat -- isfier.
+            for i, x in ipairs( cond.one ) do
+                if x.fields then
+                    for j, field in ipairs( x.fields ) do
+                        local data = mdata[field]
+                        if x.values then
+                            for k, value in ipairs( x.values ) do
+                                local typ = type( value )
+                                if typ == 'string' then
+                                    if str:is( data ) and data:find( value ) then
+                                        sat = field
+                                        break
+                                    end
+                                else
+                                    if data ~= nil and data == value then
+                                        sat = field
+                                        break
+                                    end
+                                end
+                            end
+                        else
+                            if data ~= nil then -- relying on text fields being nil not "", I think that holds.
+                                sat = field
+                                break
+                            end
+                        end
+                        if sat then
+                            break
+                        end
+                    end
+                else
+                    app:error( "No fields in one." )
+                end
+                if sat then
+                    break
+                end
+            end
+            if not sat then
+                recErr( "all blank or one not matching" )
+                ok = false
+            end
+        end
+        if cond.excl and #cond.excl > 0 then
+            for i, x in ipairs( cond.excl ) do
+                if x.fields then
+                    for j, field in ipairs( x.fields ) do
+                        local data = mdata[field]
+                        if x.values then
+                            for k, value in ipairs( x.values ) do
+                                local typ = type( value )
+                                if typ == 'string' then
+                                    if str:is( data ) and data:find( value ) then
+                                        ok = false
+                                        recErr( "'^1' has '^2'", field, value ) -- not comprehensive
+                                        break -- because of this.
+                                    end
+                                else
+                                    if data ~= nil and data == value then
+                                        ok = false
+                                        recErr( "'^1' is '^2'", field, value )
+                                        break
+                                    end
+                                end
+                            end
+                        else
+                            if mdata[field] ~= nil then -- relying on text fields being nil not "", I think that holds.
+                                ok = false
+                                recErr( "'^1' not blank", field ) -- not comprehensive
+                                break
+                            end
+                        end
+                        if not ok then
+                            break
+                        end
+                    end
+                else
+                    app:error( "No fields." )
+                end
+                if not ok then
+                    break
+                end
+            end
+        end
+    end
+    local function checkPluginMetadata( pluginId, cond, cdata )
+        app:callingAssert( cdata ~= nil, "no cdata" )
+        local mdata = custMeta:getMetadata( photo, pluginId, cdata )
+        --Debug.lognpp( mdata )
+        --Debug.showLogFile()
+        app:assert( mdata ~= nil, "no mdata" )
+        checkMetadata( cond, mdata ) -- I think format is same now.
+    end
+    if tab:isNotEmpty( exportConditions.fmtMetadata ) then
+        checkMetadata( exportConditions.fmtMetadata, photo:getFormattedMetadata() ) 
+    end
+    if tab:isNotEmpty( exportConditions.rawMetadata ) then
+        checkMetadata( exportConditions.rawMetadata, photo:getRawMetadata() ) 
+    end
+    if tab:isNotEmpty( exportConditions.pluginMetadata ) then
+        local pluginIdSet = custMeta:getPluginIds()
+        local metadata = photo:getRawMetadata( 'customMetadata' )
+        for id, cond in pairs( exportConditions.pluginMetadata ) do
+            if pluginIdSet[id] then
+                checkPluginMetadata( id, cond, metadata )
+            else
+                recErr( "missing (or disabled) plugin: ^1", id )
+            end
+        end
+    end
+    if #errb > 0 then
+        msg = table.concat( errb, " | " )
+    end
+    return ok, msg
+end
+
+
+
+--[[
+        Determines export directory given source photo, settings, ...
+--]]
+_t.getCustomDir = function( params )
+    currentDateTime = params.currentDateTime
+    local photo = params.photo or error( "no photo" )
+    local rendition = params.rendition -- not an error - may be called for sampling too...
+    local settings = params.settings
+    local exifToolSession = params.exifToolSession
+    local dir = params.dir or error( "no dir" )
+    local newDir = dir
+    local filename = params.filename or error( "no filename" )
+    local filePath = params.filePath or error( "no file-path" )
+    local cache = params.cache or error( "no cache" ) -- metadata
+    --Debug.lognpp( settings, dir, filename )
+    local exifMetadata
+    if exifToolSession then
+        local ver, more = exifToolSession:getVersionString()
+        if str:is( ver ) then
+            app:logv( "Exiftool version: ^1", ver )
+        elseif str:is( more ) then
+            app:logv( more )
+        else
+            app:logWarning( "Unable to obtain exiftool version in session mode - make sure 'Reload each export' is *NOT* checked." )
+        end
+        exifToolSession:addArg( "-S" ) -- get exif metadata in 'S' format.
+        exifToolSession:addTarget( filePath )
+        local rslt, errm = exifToolSession:execute()
+        if not str:is( errm ) then -- no error message
+            if str:is( rslt ) then
+                app:logv( "Exiftool session OK" )
+                -- exifMetadata = exifTool:parseShorty( rslt ) -- uncomment this line to have exif metadata available for naming.
+            else
+                app:log( "No exif metadata" )
+            end
+        else
+            app:logWarning( "Unable to obtain exif metadata - ^1", errm )
+        end
+    else
+        app:logv( "No exiftool session." )
+    end
+    if str:is( settings.folderSubPath ) then
+        fso:assureDir( dir )
+        local subpath = _t.getSubPath( photo, settings, 'folderSubPath' )
+        newDir = LrPathUtils.standardizePath( LrPathUtils.child( dir, subpath ) ) -- std-pth and an export-subfolder will interpret .. as parental dir, on Windows (Andreas Muller said he was doing it before the std-pth wrapper, but I don't see how, maybe on Mac..
+        --Debug.pause( newDir )
+        fso:assureDir(  newDir )
+    else
+        app:logv( "no folder sub-path" ) -- no longer an error - since custom folder naming is now enabled by default.
+    end
+    return newDir
+end
+
+
+
+--[[
+        *** Instructions:
+        
+        Edit this function to return a string to replace '_Exportant_' which should be typed into custom-text field in file naming template that includes custom text.
+        
+        Note: by default, " (copy-name)" will be appended to base filename if source photo is virtual copy, and nothing will be appended if master real copy (i.e. not a virtual copy).
+--]]
+_t.getCustomTextReplacement = function( params )
+    currentDateTime = params.currentDateTime
+    local photo = params.photo or error( "no photo" )
+    local rendition = params.rendition -- not an error (could be used to determine whether being called for true rendition, or sample - although might not matter).
+    local settings = params.settings 
+    local exifToolSession = params.exifToolSession
+    local dir = params.dir
+    local filename = params.filename
+    local filePath = params.filePath or error( "no file-path" )
+    --Debug.lognpp( settings, dir, filename )
+    local exifMetadata
+    if exifToolSession then
+        local ver, more = exifToolSession:getVersionString()
+        if str:is( ver ) then
+            app:logV( "Exiftool version: ^1", ver )
+        elseif str:is( more ) then
+            app:logV( more )
+        else
+            app:logW( "Unable to obtain exiftool version in session mode - make sure 'Reload each export' is *NOT* checked." )
+        end
+        exifToolSession:addArg( "-S" ) -- get exif metadata in 'S' format.
+        exifToolSession:addTarget( filePath )
+        local rslt, errm = exifToolSession:execute()
+        if not str:is( errm ) then -- no error message
+            if str:is( rslt ) then
+                app:logv( "Exiftool session OK" )
+                --exifMetadata = exifTool:parseShorty( rslt ) -- uncomment this line to have exif metadata available for naming.
+            else
+                app:log( "No exif metadata" )
+            end
+        else
+            app:logWarning( "Unable to obtain exif metadata - ^1", errm )
+        end
+    else
+        app:logV( "No exiftool session." )
+    end
+    -- default (replacement) filename: {token-replaced-base}[ ({copy-name})].{ext}
+    local baseFilename = _t.getFileBaseName( photo, settings, 'fileBaseName' )
+    if str:is( baseFilename ) then
+        -- got something from field
+        local virt = photo:getRawMetadata( 'isVirtualCopy' )
+        if virt then
+            return str:fmtx( "^1 (^2)", baseFilename, photo:getFormattedMetadata( 'copyName' ) )
+        else -- do not include 
+            return baseFilename
+        end
+    else
+        return "" -- return blank means use non-customized value.
+    end
+end
+
+
+
+--[[
+        Called upon for each exporting photo or video (*before* export has taken place) if 'Custom Export Function' is enabled.
+        
+        Must return true to indicate success.
+        Must return false, "and some sort of error message" to indicate failure.
+        
+        For example:
+            return true -- worked.
+            return false, "I don't know why" -- failed.
+--]]
+_t.customExportFunc = nil -- no custom export function defined - delete this line and uncomment below (*and* edit to do what you want), to enable custom export function.
+--[[
+_t.customExportFunc = function( params )
+    app:callingAssert( params, "no params" )
+    -- export settings and photo are all that is available in params.
+    local photo = params.photo or error( "no photo" )
+    local newPath = params.newPath or error( "no new path" )
+    local photoName = cat:getPhotoNameDisp( photo, true ) -- true => full path in name; no metadata cache.
+    app:logv( "Performing custom export function - target photo: '^1'", photoName )
+    local exportSettings = params.exportSettings or error( "no export settings" ) -- export settings as set by user in export dialog box.
+    
+    --local settings = tab:copy( exportSettings ) -- make copy, since it makes me nervous changing base set, even though I think it doesn't matter at this point.
+    local settings = {} -- define settings from scratch.
+    
+    local parent = LrPathUtils.parent( newPath )
+    local dir = LrPathUtils.child( parent, "high_res" )
+    local s, m = fso:assureDir( dir )
+    if not s then
+        error( m )
+    end
+    local fn = LrPathUtils.leafName( newPath )
+    
+    -- uncomment these lines and enable advanced debug in plugin manager to get a dump of the export settings in the debug log file.
+    -- note: change settings and re-run the export to see how various options are coded.
+    --Debug.lognpp( exportSettings )
+    --Debug.showLogFile()
+    
+    -- set/override export settings here:
+    settings.LR_jpeg_quality = 1 
+    settings.LR_collisionHandling = "overwrite"
+    settings.LR_export_useSubfolder = false
+    settings.LR_format = "JPEG"
+    settings.LR_ui_enableWatermark = true
+    settings.LR_removeLocationMetadata = true
+    settings.LR_size_doConstrain = true         -- do resize
+    settings.LR_size_resizeType = 'wh'          -- width x height
+    settings.LR_size_maxWidth = 240             -- square cell
+    settings.LR_size_maxHeight = 240            --    "
+    settings.LR_size_doNotEnlarge = true        -- hopefully a "don't care".
+    settings.LR_extensionCase = "lowercase"
+    settings.LR_reimportExportedPhoto = false
+    settings.LR_export_colorSpace = "sRGB"
+	settings.LR_tokens = "{{image_name}}" -- filename.
+    settings.LR_export_destinationType = "specificFolder"
+    settings.LR_export_destinationPathPrefix = dir -- folder
+    settings.LR_export_destinationPathSuffix = "" -- no subfolder
+    
+    local session = LrExportSession {
+        photosToExport = { photo },
+        exportSettings = settings,
+    }
+    
+    -- *** uncomment these lines to enable custom export functionality:
+    -- local s, m = LrTasks.pcall( session.doExportOnCurrentTask, session ) -- perform export synchronously (without spawning another asynchronous task).
+    -- return s, m
+    
+    -- delete these lines after uncommenting the above lines:
+    return false, "user needs to edit advanced settings, custom export function, and uncomment lines according to instructions..."
+end
+--]]
+
+
+
+--[[
+        Called upon after each photo or video has been exported, if 'Custom Post-export Func' is enabled.
+
+        Nothing returned - rendition and logging must be handled within.
+--]]
+_t.customPostExportFunc = nil -- no custom export function defined - delete this line and uncomment below (*and* edit to do what you want), to enable custom post-export function.
+--[[
+        Called after each video has been exported, if 'Custom Post-Export Func' is enabled.
+
+        Nothing returned: all logging and rendition handling done internally prior to return.        
+            
+        Note: this function won't be called if Lr3 - only Lr4 or Lr5 or better.
+--]]
+local ffm   -- ffmbc(win) or ffmpeg(mac)
+_t.customVideoExportFunc = function( params )
+
+    local sourceRendition = params.sourceRendition or error( "no src rend" )
+    local renditionToSatisfy = params.renditionToSatisfy or error( "no rend to sat" )
+    local exportedFilePath = params.exportedFilePath or error( "no video path" )
+    local exportSettings = params.exportSettings or error( "no settings" )
+    local photo = params.photo or error( "no photo (video)" ) -- LrPhoto object is a video.
+    local call = params.call or error( "no call" )
+    -- local cache = call.cache, - cache only present if init-function option specified - get from call object directly if you know it's there.
+    local functionContext = params.functionContext or error( "no funct ctxt" )
+    local filterContext = params.filterContext or error( "no filt ctxt" )
+    local exportFilter = params.exportFilter or error( "no filter" )
+    
+    --Debug.pause( exportedFilePath )
+    if str:is( exportedFilePath ) then
+        if fso:existsAsFile( exportedFilePath ) then
+            app:logv( "Performing custom post-export video function - target video: '^1'", exportedFilePath )
+            local output = LrPathUtils.replaceExtension( exportedFilePath, "flv" )
+            if ffm then
+                -- http://jpdelinux.wordpress.com/2011/05/20/ffmbc-documentation/
+                -- http://ffmpeg.org/ffmpeg.html
+                --local params = str:fmtx( '-i "^1" -r 15 -ar 44100 -y', exportedFilePath ) -- r = video frame rate; ar = audio bit rate.
+                --local params = str:fmtx( '-i "^1" -b 400k -y', exportedFilePath ) -- b video bitrate.
+                local params = str:fmtx( '-i "^1" -sameq -y', exportedFilePath ) -- output quality same as input.
+                
+                local sts, cmdOrMsg, resp = ffm:executeCommand( params, { output } ) 
+                if sts then
+                    app:log( "Converted '^1' to '^2' using command: ^3", exportedFilePath, output, cmdOrMsg )
+                    renditionToSatisfy:renditionIsDone( true )
+                    -- Could move this into custom-functions built-in: options for adding to catalog, etc... ###2
+                    -- on the other hand, user has complete control without such options via this func.
+                    -- perhaps waith until ffm is handled like im - user simply enters conversion parameters and the rest is handled..
+                    
+                    -- Note: If you are using custom-naming filter, then it can control keep/delete of intermediate exported video file.
+                    -- If you are *not* using custom-naming filter, then consider uncommenting this so you don't end up with extraneous video file.
+
+                    --[[                    
+                    local s, m = fso:moveToTrash( exportedFilePath )
+                    if s then
+                        if m then
+                            app:logV( m )
+                        end
+                        app:logV( "Deleted '^1', or moved to trash.", exportedFilePath )
+                    else
+                        app:logW( "Unable to move '^1' to trash after format conversion - ^2.", exportedFilePath, m or "no reason given" )
+                    end
+                    --]]
+                    
+                else
+                    app:logE( "Unable to convert '^1' to '^2' due to error: ^3. Command-line app response: ^4", exportedFilePath, output, cmdOrMsg or "?", resp or "" )
+                    renditionToSatisfy:renditionIsDone( false, "Unable to convert video - see log file for more info." )
+                end
+            else
+                app:logE( "ffm.. not init" )
+                renditionToSatisfy:renditionIsDone( false, "Unable to convert video - see log file for more info." )
+            end
+        else
+            app:logW( "Custom video export function says: no existe - ^1", exportedFilePath )
+            renditionToSatisfy:renditionIsDone( false, "Unable to convert video - see log file for more info." )
+        end
+    else
+        app:logW( "Video file path is blank." )
+        renditionToSatisfy:renditionIsDone( false, "Unable to convert video - see log file for more info." )
+    end
+    
+end
+
+
+
+--[[
+        called as export process is taking off: good place to add (raw and/or formatted) metadata of photos to be exported, to cache.
+        reminder: called *after* ok-to-export.
+        I think rendering has already begun, so it may be too late to deny rendition.
+        Note: @v5, this function serves custom (export) functions only (not custom naming...).
+        
+        Examples:
+            _t.initExport = nil -- no need for pre-export run initialization.
+            _t.initExport = function( params )
+                app:callingAssert( params, "no params" )
+                local exportFilter = params.exportFilter or error( "no export filter" )
+                local exportSettings = params.exportSettings or error( "no export settings" )
+                local photos = params.photos or error( "no photos" )
+                local cache = params.cache or error( "no metadata cache" )
+                -- cache:addRawMetadata( photos, { "keywords" } )
+                -- cache:addFormattedMetadata( photos, { "copyName" } )
+                local errorMessage -- In case of error, set message string.
+                if not errorMessage then
+                    return true -- proceed with export.
+                else
+                    return false, errorMessage
+                end
+            end
+--]]
+_t.initExport = function( params )
+    local settings = params.exportSettings or error( "no export settings for init" )
+    if settings.LR_export_videoFormat == "original" then
+        app:log( "Video export format: original" )
+    else
+        local a = app:show{ confirm="Video export is non-original. Are you sure you want to output in non-original format, then reformat after Lr formatting? (I recommend exporting in original format, to avoid formatting twice - Lr once, then custom formatting...)",
+            --subs =  settings.LR_export_videoFormat,
+            actionPrefKey = "Non-original video format",
+        }
+        if a == 'ok' then
+            app:log( "Non-original but user-approved video export format" ) -- format is gobble-de-gook.
+        else
+            return false, str:fmtx( "Non-original (unaccepted) video format" )
+        end
+    end
+    if ffm == nil then
+        if WIN_ENV then -- http://jpdelinux.wordpress.com/2011/05/20/ffmbc-documentation/
+            ffm = ExternalApp:new{ name="ffmbc", winExeName="ffmbc.exe" } -- expected with plugin.
+        else -- http://ffmpeg.org/ffmpeg.html
+            ffm = ExternalApp:new{ name="ffmpeg", maxAppName="ffmpeg" } -- expected with plugin.
+        end
+    end
+    local is, q = ffm:isUsable()
+    if is then
+        if q then
+            app:logV( q )
+        end
+        return true
+    else
+        return is, q
+    end
+end
+
+
+
+--[[
+        ChangeManager toolkit ID, used for determining photo lock status from other (non-ChangeManager) plugins,
+        and/or for pausing ChangeManager's background task from other plugins.
+        
+        Leave this nil if you don't use ChangeManager (or at least not for the locking feature),
+        or if you want leave it up to the plugin to determine whether ChangeManager is installed and what it's ID is.
+        
+        Or, you can set an explicit value if you are using a bastardized version of it, or have more than one version installed.
+        
+        Examples:
+        
+            _t.changeManagerId = nil -- ChangeManager not used, or let plugin figure it.
+            _t.changeManagerId = "com.robcole.debug.ChangeManagerDebug" -- running special debug version of ChangeManager.
+--]]
+_t.changeManagerId = nil -- changeManagerId -- assign local ID as plugin-wide pref.
+
+
+
+--[[
+        Develop preset folder filter - only presets in folders containing specified substring (case sensitive) will be presented.
+        
+        Examples:
+            _t.devPresetFolderSubstring = 'Export' -- present only presets in folders containing the substring "Export".
+            _t.devPresetFolderSubstring = 'Relative' -- present only presets in folders containing the substring "Relative".
+            _t.devPresetFolderSubstring = nil -- present all develop presets.
+--]]
+_t.devPresetFolderSubstring = nil
+
+
+
+--[[
+        Metadata preset filter - only presets containing specified substring (case sensitive) will be presented.
+        
+        Examples:
+            _t.metaPresetFolderSubstring = 'Export' -- present only presets whose name contains the substring "Export".
+            _t.metaPresetFolderSubstring = nil -- present all metaelop presets.
+--]]
+_t.metaPresetSubstring = nil
+
+
+
+--[[
+        Force Exportant to save xmp the old way, even in Lr5+.
+        
+        Note: this setting has no bearing unless 'Save XMP upon export' is enabled in export dialog box.
+        
+        Why? - the new (Lr5+) way is prone to various anomalies.
+        
+        Examples:
+            _t.saveXmpTheOldWay = true -- @20/Oct/2013 17:44, more reliable if it works.
+            _t.saveXmpTheOldWay = false -- new way must be used, since host system not supporting keyboard stuffing script (the old way) - requires Lr5+.
+            _t.saveXmpTheOldWay = nil -- Let plugin decide whether to use the old way or the new way (@20/Oct/2013 17:41, it will try to use the new way, if supported, so try setting this to true if not working reliably).
+--]]
+_t.saveXmpTheOldWay = nil
+
+
+
+--[[
+        Smart preview size (long edge).
+
+        Examples:
+            _t.smartPreviewSize = 2560 -- default @Lr5.2
+            _t.smartPreviewSize = 2540 -- default @Lr5.0
+            _t.smartPreviewSize = 1680 -- resized via PreviewExporter.
+            _t.smartPreviewSize = 4282 -- test to see what percentages would be if smart preview size same as original D300 raws.
+            _t.smartPreviewSize = nil -- Let plugin compute smart preview size (@27/Oct/2013, it will choose 2560, since one would have to be insane to still be using 5.0).
+            
+        Note: Actual smart preview size will be same as original, if original is smaller than smart preview (max) size.
+--]]
+_t.smartPreviewSize = nil
+
+
+
+--[[
+        Thumbnail view size (size of square bounding box).
+
+        Examples:
+            _t.thumbSize = 64 -- medium: the default.
+            _t.thumbSize = 32 -- tiny - I prefer more items.
+            _t.thumbSize = 128 -- large - I prefer larger thumbs.
+            _t.thunbSize = 0 -- omit thumbs - I don't need them.
+            _t.thumbSize = nil -- let plugin decide (@27/Oct/2013, it will choose medium).
+--]]
+_t.thumbSize = nil
+
+
+
+--[[
+        Use smart preview collections?
+        
+        Examples:
+            _t.useCollections = true -- Yes: put exported or skipped photos into plugin collections, and prompt me to go there after exporting.
+            _t.useCollections = false -- Don't create collections, don't use them, don't prompt... - I got this thing, don't help too much...
+            _t.useCollections = nil -- Let plugin decide (@28/Oct/2013, it'll decide "yes".
+            
+        Note: Only applies when enabling the "Confirm Smart Previews" option in export dialog box.
+--]]            
+_t.useCollections = nil -- Let plugin decide (@28/Oct/2013, it'll decide "yes".
+
+
+
+--[[
+        Master copy name - only applies to pre-export snapshotting, when %V option is specified.
+        
+        Examples:
+            _t.masterCopyName = "Master" -- the default.
+            _t.masterCopyName = "master" -- for you lower-case afficianados.
+            _t.masterCopyName = nil -- let plugin decide (@28/Oct/2013, it will decide "Master").
+            
+--]]
+_t.masterCopyName = nil
+
+
+
+--[[
+        Rigorous keyword duplicate checking - only applies if using post-export keyword clearing.
+        
+        Examples:
+            _t.keywordDupCheckRigorous = false -- minimal duplicate checking - favors shallow keyword (duplicates deeper in hierarchy may not be detected - depends..).
+            _t.keywordDupCheckRigorous = true -- entire keyword hierarchy will be searched for duplicates - very time consuming if keyword hierarchy is large.
+            _t.keywordDupCheckRigorous = nil -- let plugin decide (@30/Oct/2013 0:38, it will *not* be rigorous).
+--]]
+_t.keywordDupCheckRigorous = nil
+
+
+
+--[[
+        Keyword delimiter (separator). Only applies if using post-export keyword clearing.
+        
+        Examples:
+            _t.keywordSep = nil -- let plugin decide (@30/Oct/2013, it will decide "comma").
+            _t.keywordSep = "," -- I want comma, in case plugin changes it's mind ;-}.
+            _t.keywordSep = " " -- spaces for me (I have no spaces in my keywords).
+            _t.keywordSep = "|" -- I gotta be different...
+--]]
+_t.keywordSep = nil
+
+
+
+--[[
+        Amount to add to dimensions to correct shortness bug in Lr5.0-Lr5.2 (5.3...?).
+        
+        Note: .1 is sometimes enough, but not usually, .5 is usually enough (but not always), and is sometimes too much.
+        
+        Original (compromise) value was .3, but that proved insufficient in some cases too. So, you may need to adjust this
+        for problem files and use a different (plugin manager / preset manager) preset when exporting them.
+--]]
+_t.dimFixOffset = .4
+
+
+
+--[[
+        Filesystem time tolerance, used in conjunction with save-metadata validation.
+        
+        Smaller numbers assure no false positives, but may result in occasional or persistent inability to validate metadata saving.
+        Larger numbers are less likely to have save-metadata validation timeouts, but run the risk of metadata being considered saved, when it wasn't yet.
+        
+        Most local file-systems are reporting times to Lr to the nearest second, +/- 1 second, so a file-system
+        time tolerance of 2 is minimal. You may however need to bump this to 3 or 4, but local filesystem should not require more.
+        Network filesystems may require up to several seconds. More than a dozen seconds or so would make me uneasy (may cause unreliable results).
+        
+        Examples:
+            _t.fsTimeTolerance = 2 -- set to minimal (which @13/Nov/2013, is also the default).
+            _t.fsTimeTolerance = 4 -- doubled to increase reliability of save-metadata validation.
+            _t.fsTimeTolerance = 8 -- doubled to accomodate network file-system.
+            _t.fsTimeTolerance = nil -- let plugin decide (@13/Nov/2013, it will decide: 2).
+--]]
+_t.fsTimeTolerance = nil
+
+
+
+--[[
+        Collection name separator - applies to 'Post-export Metadata -> Collect' only.
+        
+        Examples:
+            _t.collNameSep = "," -- comma, the default.
+            _t.collNameSep = " | " -- want commas in collection name..
+            _t.collNameSep = nil -- let plugin decide (@17/Nov/2013 16:13, it'll decide "comma").
+--]]
+_t.collNameSep = nil
+
+
+
+--[[
+        Collection set - applies to 'Post-export Metadata -> Collect' only.
+        
+        Examples:
+            _t.collSet = "My Collection Set" -- preferred collection set.
+            _t.collNameSep = nil -- let plugin decide (@17/Nov/2013 16:13, it'll decide "rc Exportant").
+--]]
+_t.collSet = nil
+
+
+
+--[[
+        Determines whether to enable the deletion of originals following export.
+        
+        Until 6/Apr/2013 17:27 this was always presented, but I think it may make some folks nervous, so now requires this to be true.
+        
+        Examples:
+            _t.enableDeleteOriginalsAfterExport = false -- do not offer "Delete Originals after Export" feature in UI.
+            _t.enableDeleteOriginalsAfterExport = true -- do offer "Delete Originals after Export" feature in UI (note: there are a few other hoops user will need to jump through...).
+--]]
+_t.enableDeleteOriginalsAfterExport = false
+
+
+
+--[[
+        Splat Delete - Enable/Disable.
+        
+        set true to enable, false to disable, for example:
+        
+        _t.splatDeleteOk = true -- plugin will attempt to use windows keyboard sequence Ctrl-Shift-Alt-Delete (known as splat delete) to delete selected photos.
+        _t.splatDeleteOk = false -- plugin will prompt user to delete selected photos, and make no attempt to do it programmatically.
+        
+        Note: @30/Jan/2013 2:41, this feature should remain disabled in mac environment.
+--]]
+if WIN_ENV then
+    _t.splatDeleteOk = false
+elseif MAC_ENV then
+    _t.splatDeleteOk = false
+end
+
+
+
+--------------------------------------------
+--        Elare Plugin Framework preferences.
+---------------------------------------------
+--        (not all are used in every plugin)
+---------------------------------------------
+--        Note: If plugin defines a UI for these,
+--        then values in here will be ineffective.
+--------------------------------------------
+
+
+
+--[[
+        ChangeManager toolkit ID, used for determining photo lock status from other (non-ChangeManager) plugins,
+        and/or for pausing ChangeManager's background task from other plugins.
+        
+        Leave this nil if you don't use ChangeManager (or at least not for the locking feature),
+        or if you want leave it up to the plugin to determine whether ChangeManager is installed and what it's ID is.
+        
+        Or, you can set an explicit value if you are using a bastardized version of it, or have more than one version installed.
+        
+        Examples:
+        
+            _t.changeManagerId = nil -- ChangeManager not used, or let plugin figure it.
+            _t.changeManagerId = "com.robcole.debug.ChangeManagerDebug" -- running special debug version of ChangeManager.
+--]]
+_t.changeManagerId = nil
+
+
+
+--[[
+        Save Metadata Mode - what technique used when metadata must be saved.
+        
+        Examples:
+        
+            _t.saveMetadataMode = 'auto'       -- automatic (scripted keystroke method, which may not work on some systems).
+            _t.saveMetadataMode = 'manual'     -- manual (no keystrokes issued, user must take responsibility each time, then answer a prompt).
+            _t.saveMetadataMode = nil          -- let plugin decide.
+--]]
+_t.saveMetadataMode = nil
+
+
+
+--[[
+        Keyboard character issued to save metadata.
+        
+        Examples:
+        
+            _t.saveMetadataKeyChar = 's'        -- std english keyboards.
+            _t.saveMetadataKeyChar = nil        -- let plugin decide
+--]]
+_t.saveMetadataKeyChar = nil
+
+
+
+--[[
+        How long (in seconds) metadata save box is displayed in manual mode to give user a chance to save metadata manually.
+        
+        Examples:
+        
+            _t.delayForManualMetadataSaveBox = 2          -- 2 seconds.
+            _t.delayForManualMetadataSaveBox = nil        -- let plugin decide
+--]]
+_t.delayForManualMetadataSaveBox = nil
+
+
+
+--[[
+        Maximum time to wait (in seconds) in manual mode, before giving up on metadata read.
+        
+        *** Despite the name, applies in Windows too.
+        
+        Examples:
+        
+            _t.timeRequiredToReadMetadataOnMac = 7          -- 7 seconds.
+            _t.timeRequiredToReadMetadataOnMac = nil        -- let plugin decide
+--]]
+_t.timeRequiredToReadMetadataOnMac = nil
+
+
+
+--[[
+        Read Metadata Mode - what technique used when metadata must be read.
+        
+        *** Best *not* to set this to 'auto' if using Mac.
+        
+        Examples:
+        
+            _t.readMetadataMode = 'auto'       -- automatic (scripted keystroke method, which may not work on some systems).
+            _t.readMetadataMode = 'manual'     -- manual (no keystrokes issued, user must take responsibility each time, then answer a prompt).
+            _t.readMetadataMode = nil          -- let plugin decide.
+--]]
+_t.readMetadataMode = nil
+
+
+
+--[[
+        Alt-keyboard character issued to read metadata.
+        
+        *** Does not apply on Mac.
+        
+        Examples:
+        
+            _t.readMetadataKeyChar = 'mr'        -- std english keyboards.
+            _t.readMetadataKeyChar = nil        -- let plugin decide
+--]]
+_t.readMetadataKeySeq = nil
+
+
+
+--[[
+        Keyboard character issued to invoke grid mode of library module.
+        
+        Examples:
+        
+            _t.gridModeChar = 'g'        -- std english keyboards.
+            _t.gridModeChar = nil        -- let plugin decide
+--]]
+_t.gridModeChar = nil
+
+
+
+--[[
+        Base time to wait (in seconds) for various time-sensitive operations that involve delays for settling time in Lightroom.
+        
+        Examples:
+        
+            _t.timebase = .1          -- 1/10th of a second.
+            _t.timebase = nil        -- let plugin decide
+--]]
+_t.timebase = nil
+
+
+
+--[[
+        Determines whether picked photos should be subject to deletion or not, when deleting photos.
+        
+        Examples:
+        
+            _t.preservePicks = true -- do not delete photos with pick flag set.
+            _t.preservePicks = false -- ok to delete picked photos too.
+            _t.preservePicks = nil -- let plugin decide (usually: ok to delete picked photos too).
+--]]
+_t.preservePicks = nil
+
+
+
+--[[
+        Filesystem time tolerance, used in conjunction with save-metadata validation.
+        
+        Smaller numbers assure no false positives, but may result in occasional or persistent inability to validate metadata saving.
+        Larger numbers are less likely to have save-metadata validation timeouts, but run the risk of metadata being considered saved, when it wasn't yet.
+        
+        Most local file-systems are reporting times to Lr to the nearest second, +/- 1 second, so a file-system
+        time tolerance of 2 is minimal. You may however need to bump this to 3 or 4, but local filesystem should not require more.
+        Network filesystems may require up to several seconds. More than a dozen seconds or so would make me uneasy (may cause unreliable results).
+        
+        Examples:
+            _t.fsTimeTolerance = 2 -- set to minimal (which @13/Nov/2013, is also the default).
+            _t.fsTimeTolerance = 4 -- doubled to increase reliability of save-metadata validation.
+            _t.fsTimeTolerance = 8 -- doubled to accomodate network file-system.
+            _t.fsTimeTolerance = nil -- let plugin decide (@13/Nov/2013, it will decide: 2).
+--]]
+_t.fsTimeTolerance = nil
+
+
+
+-- return config table
+return _t
